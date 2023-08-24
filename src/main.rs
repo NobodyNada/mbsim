@@ -219,10 +219,12 @@ fn main() {
             for &input in &self.inputs {
                 if let Some(i) = input {
                     if prev == i {
-                        result += 1;
-                    } else {
+                        if i {
+                            result += 1;
+                        }
+                    } else if prev && !i {
                         // switches are hard
-                        result += 10000 / (prev_time + 1);
+                        result += 10000 / (prev_time + 1usize).pow(2u32);
                     }
 
                     prev = i;
@@ -328,11 +330,17 @@ fn main() {
             .collect();
 
         // to keep things under control, only keep the paths with the fewest input requirements
-        let max = 10000;
+        let max = 100000;
         if paths.len() > max {
             paths.sort_by_cached_key(|path| path.difficulty());
             paths.drain(max..);
         }
+    }
+
+    let max = 1000;
+    if paths.len() > max {
+        paths.sort_by_cached_key(|path| path.difficulty());
+        paths.drain(max..);
     }
 
     let width = trace.len();
