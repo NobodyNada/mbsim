@@ -12,6 +12,7 @@ use std::{
 };
 
 use image::{ImageBuffer, ImageOutputFormat, Rgb};
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use smallvec::SmallVec;
 
 #[allow(clippy::tabs_in_doc_comments)]
@@ -254,8 +255,8 @@ fn main() {
         let prev_states = &all_states[i - 1];
 
         paths = paths
-            .drain(..)
-            .flat_map(|path| {
+            .into_par_iter()
+            .flat_map_iter(|path| {
                 // States which lead into a state within this path regardless of Samus action.
                 let mut x = HashSet::<u32>::new();
                 // States which lead into a state within this path if Samus is above MB.
@@ -330,7 +331,7 @@ fn main() {
             .collect();
 
         // to keep things under control, only keep the paths with the fewest input requirements
-        let max = 100000;
+        let max = 1000000;
         if paths.len() > max {
             paths.sort_by_cached_key(|path| path.difficulty());
             paths.drain(max..);

@@ -7,4 +7,5 @@ edition = "2021"
 
 [dependencies]
 image = { version = "0.24.7", features = ["png"], default-features = false }
+rayon = "1.7.0"
 smallvec = "1.11.0"
