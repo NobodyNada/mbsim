@@ -1,6 +1,6 @@
 /// Simulation of Mother Brain's neck, to find and analyze strats for standup manip.
-/// By NobodyNada -- with credit to ShinyZeni, ProfessorSchool, sniq, PJBoy, and cpadolf for helping
-/// out with this in one way or another :)
+/// By NobodyNada -- with credit to ShinyZeni, ProfessorSchool, sniq, PJBoy, Saturn,
+/// and cpadolf for helping out with this in one way or another :)
 ///
 /// I recommend running with optimizations, as it does a pretty big brute force. It runs in about 15
 /// seconds on my machine, but if your computer is slower or you want to iterate faster, it should
@@ -15,7 +15,7 @@ use image::{ImageBuffer, ImageOutputFormat, Rgb};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use smallvec::SmallVec;
 
-#[allow(clippy::tabs_in_doc_comments)]
+#[allow(clippy::tabs_in_doc_comments, dead_code)]
 /// This program requires data logged from vanilla SM, while Mother Brain's neck is bobbing back
 /// and forth after she is grabbed by the baby.
 /// The input was generated in lsnes using the following Lua script:
@@ -395,6 +395,7 @@ fn main() {
 /// - trace: The input trace.
 /// - jump_frames: A function to determine, given a frame number,
 ///   whether Samus is above MB during that frame.
+#[allow(dead_code)]
 fn simulate(trace: &[Frame], mut jump_frames: impl FnMut(usize) -> bool) -> u16 {
     let mut mb = MotherBrain {
         lower_angle: 0x9000,
