@@ -6,9 +6,13 @@
 /// seconds on my machine, but if your computer is slower or you want to iterate faster, it should
 /// be pretty easy to parallelize with rayon: https://crates.io/crates/rayon
 use std::{
+    collections::{HashMap, HashSet},
     fs::File,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Write},
 };
+
+use image::{ImageBuffer, ImageOutputFormat, Rgb};
+use smallvec::SmallVec;
 
 #[allow(clippy::tabs_in_doc_comments)]
 /// This program requires data logged from vanilla SM, while Mother Brain's neck is bobbing back
@@ -49,6 +53,7 @@ struct Frame {
 }
 
 /// Our simulation of Mother Brain's neck state.
+#[derive(Hash, PartialEq, Eq, Clone, Copy, Debug)]
 struct MotherBrain {
     /// The angle between her torso and bottom 2 neck joints.
     /// $7E:8040 in vanilla SM.
@@ -128,7 +133,7 @@ impl MotherBrain {
 
 fn main() {
     // Read the input trace.
-    let frames = BufReader::new(File::open("trace.txt").expect(
+    let trace = BufReader::new(File::open("trace.txt").expect(
         "this program requires a trace from vanilla SM, \
          make sure 'trace.txt' is present in the current directory.",
     ))
@@ -151,20 +156,211 @@ fn main() {
     })
     .collect::<Vec<Frame>>();
 
-    // For all possible time intervals (a, b), evaluate the following strategy:
-    // - Start out on the ground
-    // - Jump in the air at time a
-    // - Come back down to the ground at time b
-    let results = (0..frames.len())
-        .flat_map(|a| (0..frames.len()).map(move |b| (a, b)))
-        .map(|(a, b)| (a, b, simulate(&frames, |j| a < j && j < b)))
-        // Show all results better than a threshold. This way, we can visually inspect the output
-        // for "clusters" of especially good results -- for the purposes
-        // of finding lenient, RTA-viable setups.
-        .filter(|(_a, _b, x)| *x > 0x8000);
-    for (a, b, angle) in results {
-        println!("{a}-{b}:\t{angle:#04X}");
+    // An array of (parent_index, jumping) tuples, where jumping is either true, false, or None
+    type Parents = SmallVec<[(u32, Option<bool>); 4]>;
+    let mut all_states = vec![vec![(
+        MotherBrain {
+            lower_angle: 0x9000,
+            upper_angle: 0x9800,
+            lower_moving_up: false,
+            upper_moving_up: false,
+        },
+        Parents::default(),
+    )]];
+
+    let mut new_states = HashMap::<MotherBrain, Parents>::new();
+    for (i, frame) in trace.iter().enumerate() {
+        eprintln!("frame {i}, {} states", all_states[i].len());
+        let delta = trace
+            .get(i + 1)
+            .unwrap_or(trace.last().unwrap())
+            .angle_delta;
+
+        for (j, prev) in all_states[i].iter().enumerate() {
+            let mut jumping = prev.0;
+            jumping.run_frame(frame.body_y, delta, true);
+
+            let mut not_jumping = prev.0;
+            not_jumping.run_frame(frame.body_y, delta, false);
+
+            if jumping == not_jumping {
+                // It doesn't matter whether we jump or not.
+                new_states
+                    .entry(jumping)
+                    .or_insert(SmallVec::new())
+                    .push((j.try_into().unwrap(), None));
+            } else {
+                new_states
+                    .entry(jumping)
+                    .or_insert(SmallVec::new())
+                    .push((j.try_into().unwrap(), Some(true)));
+
+                new_states
+                    .entry(not_jumping)
+                    .or_insert(SmallVec::new())
+                    .push((j.try_into().unwrap(), Some(false)));
+            }
+        }
+
+        all_states.push(new_states.drain().collect());
     }
+    //end_states.sort_by_key(|s| s.0.lower_angle);
+    //println!("{:#?}", end_states);
+
+    struct Path {
+        states: SmallVec<[u32; 8]>,
+        inputs: Vec<Option<bool>>,
+    }
+    impl Path {
+        fn difficulty(&self) -> usize {
+            let mut result = 0;
+            let mut prev = false;
+            let mut prev_time = 1000000;
+            for &input in &self.inputs {
+                if let Some(i) = input {
+                    if prev == i {
+                        result += 1;
+                    } else {
+                        // switches are hard
+                        result += 10000 / (prev_time + 1);
+                    }
+
+                    prev = i;
+                    prev_time = 0;
+                } else {
+                    prev_time += 1;
+                }
+            }
+            result
+        }
+    }
+
+    let mut paths = vec![Path {
+        states: all_states
+            .last()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| s.0.lower_angle >= 0x8000)
+            .map(|(i, _)| i as u32)
+            .collect(),
+        inputs: vec![],
+    }];
+
+    for (i, states) in all_states.iter().enumerate().skip(1).rev() {
+        eprintln!("frame {i}, {} paths", paths.len());
+        let prev_states = &all_states[i - 1];
+
+        paths = paths
+            .drain(..)
+            .flat_map(|path| {
+                // States which lead into a state within this path regardless of Samus action.
+                let mut x = HashSet::<u32>::new();
+                // States which lead into a state within this path if Samus is above MB.
+                let mut y = HashSet::<u32>::new();
+                // States which lead into a state within this path if Samus is above MB.
+                let mut n = HashSet::<u32>::new();
+
+                for &(parent, input) in path
+                    .states
+                    .iter()
+                    .flat_map(|s| states[*s as usize].1.iter())
+                {
+                    match input {
+                        _ if x.contains(&parent) => {}
+                        None => {
+                            n.remove(&parent);
+                            y.remove(&parent);
+                            x.insert(parent);
+                        }
+                        Some(true) => {
+                            if n.remove(&parent) {
+                                x.insert(parent);
+                            } else {
+                                y.insert(parent);
+                            }
+                        }
+                        Some(false) => {
+                            if y.remove(&parent) {
+                                x.insert(parent);
+                            } else {
+                                n.insert(parent);
+                            }
+                        }
+                    }
+                }
+
+                [
+                    if !x.is_empty() {
+                        let mut inputs = path.inputs.clone();
+                        inputs.push(None);
+                        Some(Path {
+                            states: x.drain().collect(),
+                            inputs,
+                        })
+                    } else {
+                        None
+                    },
+                    if !y.is_empty() {
+                        let mut inputs = path.inputs.clone();
+                        inputs.push(Some(true));
+                        Some(Path {
+                            states: y.drain().collect(),
+                            inputs,
+                        })
+                    } else {
+                        None
+                    },
+                    if !n.is_empty() {
+                        let mut inputs = path.inputs;
+                        inputs.push(Some(false));
+                        Some(Path {
+                            states: n.drain().collect(),
+                            inputs,
+                        })
+                    } else {
+                        None
+                    },
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .collect();
+
+        // to keep things under control, only keep the paths with the fewest input requirements
+        let max = 10000;
+        if paths.len() > max {
+            paths.sort_by_cached_key(|path| path.difficulty());
+            paths.drain(max..);
+        }
+    }
+
+    let width = trace.len();
+    let height = paths.len();
+
+    let mut image = ImageBuffer::<Rgb<u8>, _>::new(width as u32, height as u32);
+
+    for (y, path) in paths.iter().enumerate() {
+        for (x, input) in path.inputs.iter().enumerate() {
+            image.put_pixel(
+                (width - x - 1) as u32,
+                y as u32,
+                match input {
+                    None => Rgb([255, 255, 255]),
+                    Some(true) => Rgb([0, 255, 0]),
+                    Some(false) => Rgb([255, 0, 0]),
+                },
+            )
+        }
+    }
+
+    let mut buf = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut buf), ImageOutputFormat::Png)
+        .expect("failed to encode image");
+    std::io::stdout()
+        .write_all(&buf)
+        .expect("failed to write image");
 }
 
 /// Runs a simulation of a complete cutscene.
