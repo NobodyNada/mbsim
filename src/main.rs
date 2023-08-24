@@ -223,9 +223,9 @@ fn main() {
                         if i {
                             result += 1;
                         }
-                    } else if prev && !i {
+                    } else {
                         // switches are hard
-                        result += 10000 / (prev_time + 1usize).pow(2u32);
+                        result += 10000 / prev_time.max(1usize).pow(2u32);
                     }
 
                     prev = i;
@@ -244,7 +244,7 @@ fn main() {
             .unwrap()
             .iter()
             .enumerate()
-            .filter(|(i, s)| s.0.lower_angle >= 0x8000)
+            .filter(|(_, s)| s.0.lower_angle >= 0x8000)
             .map(|(i, _)| i as u32)
             .collect(),
         inputs: vec![],
@@ -252,11 +252,19 @@ fn main() {
 
     for (i, states) in all_states.iter().enumerate().skip(1).rev() {
         eprintln!("frame {i}, {} paths", paths.len());
-        let prev_states = &all_states[i - 1];
 
         paths = paths
             .into_par_iter()
             .flat_map_iter(|path| {
+                // get rid of annoying difficult down/up/down sequences
+                if path.inputs.iter().rev().take(4).copied().eq([
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(false),
+                ]) {
+                    return [None, None, None].into_iter().flatten();
+                }
                 // States which lead into a state within this path regardless of Samus action.
                 let mut x = HashSet::<u32>::new();
                 // States which lead into a state within this path if Samus is above MB.
@@ -291,6 +299,12 @@ fn main() {
                             }
                         }
                     }
+                }
+
+                // ignore trailing N/X that aren't important, to cut down on the number of paths we
+                // have to search
+                if i > 820 && path.inputs.iter().all(|i| *i != Some(true)) {
+                    n.extend(x.drain());
                 }
 
                 [
@@ -330,12 +344,17 @@ fn main() {
             })
             .collect();
 
-        // to keep things under control, only keep the paths with the fewest input requirements
-        let max = 1000000;
+        // to keep things under control, only keep the most viable paths
+        let max = 100000;
         if paths.len() > max {
             paths.sort_by_cached_key(|path| path.difficulty());
             paths.drain(max..);
         }
+
+        //if i == 700 {
+        //    // drop all the paths that
+        //    paths.drain(131..);
+        //}
     }
 
     let max = 1000;
